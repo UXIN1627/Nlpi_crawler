@@ -253,31 +253,21 @@ if start_btn:
             progress_bar.progress(progress)
             status_box.info(f"正在載入評論... 已取得 {count} / {max_reviews} 則")
 
+    # 執行爬蟲
     with st.spinner("爬蟲執行中，請稍候..."):
-        reviews = asyncio.run(run_crawler(max_reviews, status_cb))
-# ... 前面是你的 status_cb 定義 ...
-
-    with st.spinner("爬蟲執行中，請稍候..."):
-        # 這裡執行爬蟲
         reviews = asyncio.run(run_crawler(max_reviews, status_cb))
 
     progress_bar.progress(1.0)
 
-    # --- 💡 在這裡新增：顯示除錯截圖 ---
+    # --- 💡 顯示除錯截圖 ---
     import os
     if os.path.exists("debug_screenshot.png"):
         with st.expander("🛠️ 查看爬蟲當下看到的畫面 (除錯用)"):
             st.image("debug_screenshot.png")
-    # --------------------------------
-
-    status_box.success(f"完成！共爬取 {len(reviews)} 則評論。")
+    # --------------------
 
     if reviews:
-        # ... 後面接原本的顯示結果邏輯 ...
-    progress_bar.progress(1.0)
-    status_box.success(f"完成！共爬取 {len(reviews)} 則評論。")
-
-    if reviews:
+        status_box.success(f"完成！共爬取 {len(reviews)} 則評論。")
         st.divider()
         st.subheader(f"評論結果（共 {len(reviews)} 則）")
 
@@ -301,4 +291,5 @@ if start_btn:
             use_container_width=True,
         )
     else:
-        st.error("未爬取到任何評論，請稍後再試或確認網路連線。")
+        status_box.error("完成，但未爬取到任何評論。")
+        st.error("未爬取到任何評論，請查看上方的「除錯用」畫面確認原因。")
