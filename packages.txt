@@ -1,1 +1,2 @@
-chromium
+chromium-chromedriver
+fonts-noto-cjk
