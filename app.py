@@ -18,7 +18,7 @@ st.set_page_config(
 )
 
 TARGET_URL = (
-    "# 這個網址帶有 !9m1!1b1 參數，理論上會直接開啟「所有評論」面板
+    # 這個網址帶有 !9m1!1b1 參數，理論上會直接開啟「所有評論」面板
 TARGET_URL = "https://www.google.com/maps/place/%E5%9C%8B%E7%AB%8B%E5%85%AC%E5%85%B1%E8%B3%87%E8%A8%8A%E5%9C%96%E6%9B%B8%E9%A4%A8/@24.1272771,120.6708688,17z/data=!4m8!3m7!1s0x34693d0146d61257:0x7a16000e8eb3abce!8m2!3d24.1272771!4d120.6708688!9m1!1b1"
 )
 
