@@ -28,19 +28,13 @@ TARGET_URL = (
 # ── 確保 Playwright Chromium 已安裝 ──────────────────────────────────────────
 @st.cache_resource(show_spinner="正在初始化瀏覽器環境（首次約需 1 分鐘）...")
 def install_playwright():
-    # 安裝系統依賴 + Chromium 執行檔
+    # 只下載瀏覽器執行檔（不用 --with-deps，避免需要 sudo）
     result = subprocess.run(
-        ["playwright", "install", "--with-deps", "chromium"],
-        capture_output=True,
+        [sys.executable, "-m", "playwright", "install", "chromium"],
+        capture_output=False,  # 顯示輸出以便除錯
         text=True,
     )
-    if result.returncode != 0:
-        # 備用：透過 python -m playwright
-        subprocess.run(
-            [sys.executable, "-m", "playwright", "install", "--with-deps", "chromium"],
-            capture_output=True,
-            text=True,
-        )
+    return result.returncode
 
 
 install_playwright()
