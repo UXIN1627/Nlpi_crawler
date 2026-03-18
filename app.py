@@ -146,24 +146,34 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
             launch_kwargs["executable_path"] = chromium_path
             
         browser = await p.chromium.launch(**launch_kwargs)
+        
+        # 設定模擬真實瀏覽器的環境
         context = await browser.new_context(
             locale="zh-TW", 
-            viewport={"width": 1280, "height": 1000}, # 稍微加高高度
+            viewport={"width": 1280, "height": 1000},
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        status_cb(-1) 
-        await page.goto(TARGET_URL, wait_until="networkidle", timeout=60000)
+        status_cb(-1) # 狀態更新：正在開啟頁面
+        
+        # --- 核心導航邏輯：解決 Timeout 問題 ---
+        try:
+            # 改用 domcontentloaded 避免網路請求抓不到 idle 而超時
+            await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+        except Exception:
+            # 如果超時，嘗試強制停止並繼續執行
+            pass
+            
+        # 等待地圖與側欄渲染
         await page.wait_for_timeout(5000)
         
-        # 1. 處理彈窗
+        # 1. 處理彈窗（Cookie 或條款）
         await close_popups(page)
 
-        # 2. 【新增】檢查側欄是否出現，若沒出現則主動搜尋
-        sidebar_title = page.locator('h1.DUwDvf').first # 店家標題的 class
-        if await sidebar_title.count() == 0:
-            # 沒看到標題，嘗試點擊搜尋框並搜尋
+        # 2. 確保側欄資訊有出來，若沒有則主動搜尋
+        # 檢查是否有標題出現，如果沒有代表進去的是空地圖
+        if await page.locator('h1.DUwDvf').first.count() == 0:
             try:
                 search_box = page.locator('input#searchboxinput')
                 await search_box.fill("國立公共資訊圖書館")
@@ -172,44 +182,39 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
             except Exception:
                 pass
 
-        # 3. 強制點擊「評論」分頁
+        # 3. 尋找並點擊「評論」按鈕
         tab_found = False
         tab_selectors = [
             'button[role="tab"]:has-text("評論")',
             'button[role="tab"]:has-text("Reviews")',
-            'div.R61m6b:has-text("評論")', # 有時候是 div
+            'div.R61m6b:has-text("評論")',
             'button[aria-label*="評論"]'
         ]
         
         for tab_sel in tab_selectors:
             try:
-                tab_btn = page.locator(tab_sel).first
-                if await tab_btn.is_visible(timeout=3000):
-                    await tab_btn.click()
+                btn = page.locator(tab_sel).first
+                if await btn.is_visible(timeout=3000):
+                    await btn.click()
                     tab_found = True
                     await page.wait_for_timeout(3000)
                     break
             except Exception:
                 continue
 
-        # 如果透過搜尋進來是列表（多個結果），點擊第一個結果
-        if not tab_found:
-            first_result = page.locator('a.hfpxzc').first
-            if await first_result.is_visible():
-                await first_result.click()
-                await page.wait_for_timeout(3000)
-
-        # 最後一次截圖檢查（這時應該要看到評論區了）
+        # 4. 除錯截圖：讓我們看現在到底在哪一頁
         await page.screenshot(path="debug_screenshot.png")
 
+        # 5. 等待評論清單容器
         try:
-            # 等待評論容器出現
             await page.wait_for_selector('div[role="feed"]', timeout=10000)
         except Exception:
             pass
 
+        # 6. 開始滾動載入與解析
         await scroll_to_load(page, max_reviews, status_cb)
         reviews = await parse_reviews(page, max_reviews)
+        
         await browser.close()
         
     return reviews
