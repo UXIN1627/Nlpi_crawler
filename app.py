@@ -146,58 +146,63 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
             launch_kwargs["executable_path"] = chromium_path
             
         browser = await p.chromium.launch(**launch_kwargs)
+        # 加大視窗高度，讓更多元素一次性載入
         context = await browser.new_context(
             locale="zh-TW", 
-            viewport={"width": 1280, "height": 1000},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            viewport={"width": 1280, "height": 1200}, 
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
         status_cb(-1) 
         
         try:
-            # 前往網頁
+            # 1. 前往網址
             await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(5000)
             await close_popups(page)
         except Exception:
             pass
 
-        # 【關鍵修復 1】：如果進到了「路線/導航」畫面，點擊「返回」回到圖書館資訊頁
-        back_btn = page.locator('button[aria-label*="返回"], button[aria-label*="Back"]').first
-        if await back_btn.is_visible():
-            await back_btn.click()
-            await page.wait_for_timeout(2000)
-
-        # 【關鍵修復 2】：點擊「評論」標籤 (使用多重屬性定位)
+        # 2. 解決截圖中的問題：如果沒看到評論標籤，嘗試點擊評分分數 (例如 "4.7") 或捲動側欄
         try:
-            # 優先嘗試透過 aria-label 定位（不受字體亂碼影響）
+            # 嘗試點擊標籤
             review_tab = page.locator('button[aria-label*="評論"], button[aria-label*="Reviews"]').first
-            if await review_tab.is_visible():
+            if await review_tab.is_visible(timeout=3000):
                 await review_tab.click()
             else:
-                # 備援方案：用 JS 強制尋找文字
-                await page.evaluate('''() => {
-                    const btns = Array.from(document.querySelectorAll('button, div, span'));
-                    const target = btns.find(b => 
-                        (b.innerText && (b.innerText.includes('評論') || b.innerText.includes('Reviews')))
-                    );
-                    if (target) target.click();
-                }''')
-            await page.wait_for_timeout(3000)
+                # 如果找不到標籤，嘗試尋找包含「則評論」字樣的元素並點擊
+                reviews_count_link = page.locator('button:has-text("則評論"), span:has-text("則評論")').first
+                if await reviews_count_link.is_visible():
+                    await reviews_count_link.click()
+                else:
+                    # 還是找不到？捲動側欄嘗試觸發載入
+                    sidebar = page.locator('div[role="main"]').first
+                    await sidebar.evaluate("el => el.scrollTo(0, 500)")
+                    await page.wait_for_timeout(2000)
         except Exception:
             pass
 
-        # 截圖檢查
+        # 3. 備援：若沒進到評論區，嘗試用 JS 強制尋找所有可能的按鈕
+        await page.evaluate('''() => {
+            const btns = Array.from(document.querySelectorAll('button, span, div'));
+            const target = btns.find(b => b.innerText && (b.innerText.includes('評論') || b.innerText.includes('Reviews')));
+            if (target) target.click();
+        }''')
+        await page.wait_for_timeout(3000)
+
+        # 4. 截圖檢查 (現在應該要看到評論清單了)
         await page.screenshot(path="debug_screenshot.png")
 
-        # 等待評論區塊
+        # 5. 等待評論饋送區塊出現
         try:
-            await page.wait_for_selector('div[role="feed"]', timeout=10000)
+            await page.wait_for_selector('div[role="feed"], div[data-review-id]', timeout=10000)
         except Exception:
-            # 如果還是找不到 feed，嘗試點擊一下畫面中心再滾動
-            await page.mouse.click(400, 500)
+            # 最後一招：如果還是沒出來，按一下 Tab 鍵嘗試切換
+            await page.keyboard.press("Tab")
+            await page.wait_for_timeout(1000)
 
+        # 6. 開始滾動載入與解析
         await scroll_to_load(page, max_reviews, status_cb)
         reviews = await parse_reviews(page, max_reviews)
         
