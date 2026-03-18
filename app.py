@@ -17,8 +17,8 @@ st.set_page_config(
     layout="centered",
 )
 
-TARGET_URL = "https://www.google.com/maps/place/%E5%9C%8B%E7%AB%8B%E5%85%AC%E5%85%B1%E8%B3%87%E8%A8%8A%E5%9C%96%E6%9B%B8%E9%A4%A8/@24.1272771,120.6708688,17z"
-
+# 使用 CID (Customer ID) 直接定位，這是 Google Maps 最穩定的網址格式
+TARGET_URL = "https://www.google.com/maps?cid=8801700684124924878&authuser=0&hl=zh-TW"
 
 
 
@@ -146,63 +146,58 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
             launch_kwargs["executable_path"] = chromium_path
             
         browser = await p.chromium.launch(**launch_kwargs)
-        # 加大視窗高度，讓更多元素一次性載入
+        # 設定視窗與 User-Agent，讓它看起來更像真實用戶
         context = await browser.new_context(
             locale="zh-TW", 
-            viewport={"width": 1280, "height": 1200}, 
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            viewport={"width": 1280, "height": 1200},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
         status_cb(-1) 
         
         try:
-            # 1. 前往網址
+            # 1. 前往網址 (增加評論區參數 !9m1!1b1)
+            review_url = f"{TARGET_URL}&shorturl=1"
             await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(5000)
             await close_popups(page)
         except Exception:
             pass
 
-        # 2. 解決截圖中的問題：如果沒看到評論標籤，嘗試點擊評分分數 (例如 "4.7") 或捲動側欄
+        # 2. 強制進入評論區的關鍵邏輯
         try:
-            # 嘗試點擊標籤
-            review_tab = page.locator('button[aria-label*="評論"], button[aria-label*="Reviews"]').first
-            if await review_tab.is_visible(timeout=3000):
-                await review_tab.click()
+            # 策略 A: 找評論分頁按鈕
+            tab = page.locator('button[aria-label*="評論"], button[role="tab"]:has-text("評論")').first
+            if await tab.is_visible(timeout=3000):
+                await tab.click()
             else:
-                # 如果找不到標籤，嘗試尋找包含「則評論」字樣的元素並點擊
-                reviews_count_link = page.locator('button:has-text("則評論"), span:has-text("則評論")').first
-                if await reviews_count_link.is_visible():
-                    await reviews_count_link.click()
+                # 策略 B: 找包含星等分數的按鈕 (例如 4.7)
+                stars_link = page.locator('button[aria-label*="顆星"], [aria-label*="則評論"]').first
+                if await stars_link.is_visible():
+                    await stars_link.click()
                 else:
-                    # 還是找不到？捲動側欄嘗試觸發載入
-                    sidebar = page.locator('div[role="main"]').first
-                    await sidebar.evaluate("el => el.scrollTo(0, 500)")
-                    await page.wait_for_timeout(2000)
+                    # 策略 C: 強制跳轉到評論特定的 URL
+                    # 這是國資圖評論區的直接參數
+                    await page.goto(TARGET_URL + "&output=classic&dg=brse&hl=zh-TW&shorturl=1#reviews", wait_until="domcontentloaded")
+            
+            await page.wait_for_timeout(3000)
         except Exception:
             pass
 
-        # 3. 備援：若沒進到評論區，嘗試用 JS 強制尋找所有可能的按鈕
-        await page.evaluate('''() => {
-            const btns = Array.from(document.querySelectorAll('button, span, div'));
-            const target = btns.find(b => b.innerText && (b.innerText.includes('評論') || b.innerText.includes('Reviews')));
-            if (target) target.click();
-        }''')
-        await page.wait_for_timeout(3000)
-
-        # 4. 截圖檢查 (現在應該要看到評論清單了)
+        # 3. 截圖除錯
         await page.screenshot(path="debug_screenshot.png")
 
-        # 5. 等待評論饋送區塊出現
+        # 4. 等待評論列表
         try:
-            await page.wait_for_selector('div[role="feed"], div[data-review-id]', timeout=10000)
+            # 嘗試定位評論饋送區
+            await page.wait_for_selector('div[role="feed"], div[data-review-id]', timeout=15000)
         except Exception:
-            # 最後一招：如果還是沒出來，按一下 Tab 鍵嘗試切換
-            await page.keyboard.press("Tab")
-            await page.wait_for_timeout(1000)
+            # 如果還是沒有，嘗試向下捲動側欄
+            await page.mouse.wheel(0, 500)
+            await page.wait_for_timeout(2000)
 
-        # 6. 開始滾動載入與解析
+        # 5. 開始滾動載入與解析
         await scroll_to_load(page, max_reviews, status_cb)
         reviews = await parse_reviews(page, max_reviews)
         
