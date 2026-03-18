@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import os
+import random 
 from datetime import datetime
 
 import streamlit as st
@@ -65,6 +66,8 @@ async def scroll_to_load(page, target: int, status_cb):
             if current_count > 0:
                 await reviews.last.scroll_into_view_if_needed()
             await page.wait_for_timeout(2000)
+            delay = random.randint(2500, 5500) # 隨機等待 2.5 到 5.5 秒
+            await page.wait_for_timeout(delay)
         except:
             break
 
