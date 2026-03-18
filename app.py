@@ -125,6 +125,7 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
 
         status_cb(-1) # 狀態：正在開啟頁面
         await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+        await page.wait_for_timeout(random.randint(3000, 6000)) # 等待 3-6 秒
         
         # 處理 Cookie 彈窗
         try:
@@ -164,6 +165,17 @@ def reviews_to_markdown(reviews: list[dict]) -> str:
         ]
     return "\n".join(lines)
 
+# --- 💡 新增快取邏輯 ---
+# ttl=3600 代表這份資料會存在記憶體 1 小時 (3600秒)
+# 如果一小時內有人也選了同樣的數量，會直接秒出結果，不跑爬蟲
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_cached_reviews(max_n):
+    # 因為 st.cache_data 不支援在快取時執行 UI 回饋 (status_cb)
+    # 所以我們在這裡傳入一個空函數給原本的爬蟲
+    def dummy_cb(count): pass
+    
+    # 執行原本的非同步爬蟲並回傳結果
+    return asyncio.run(run_crawler(max_n, dummy_cb))
 # ── Streamlit UI ──────────────────────────────────────────────────────────────
 
 st.title("📚 國立公共資訊圖書館 Google 評論爬蟲")
