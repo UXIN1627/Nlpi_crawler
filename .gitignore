@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+Nlpi_reviews.md
+.playwright/
