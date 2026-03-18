@@ -18,10 +18,7 @@ st.set_page_config(
 )
 
 TARGET_URL = (
-    "https://www.google.com/maps/place/%E5%9C%8B%E7%AB%8B%E5%85%AC%E5%85%B1%E8%B3%87"
-    "%E8%A8%8A%E5%9C%96%E6%9B%B8%E9%A4%A8/@24.1232134,120.6673792,15z/data=!4m8!3m7"
-    "!1s0x34693d0146d61257:0x7a16000e8eb3abce!8m2!3d24.1272771!4d120.6708688!9m1!1b1"
-    "!16s%2Fm%2F010hkjk0?authuser=0&entry=ttu&g_ep=EgoyMDI2MDMxNS4wIKXMDSoASAFQAw%3D%3D"
+    "https://www.google.com/maps/search/%E5%9C%8B%E7%AB%8B%E5%85%AC%E5%85%B1%E8%B3%87%E8%A8%8A%E5%9C%96%E6%9B%B8%E9%A4%A8"
 )
 
 
@@ -142,7 +139,6 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
                 "--disable-dev-shm-usage",
                 "--disable-gpu", 
                 "--single-process",
-                # 隱藏自動化特徵，降低被 Google 擋下的機率
                 "--disable-blink-features=AutomationControlled" 
             ],
         )
@@ -150,44 +146,64 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
             launch_kwargs["executable_path"] = chromium_path
             
         browser = await p.chromium.launch(**launch_kwargs)
-        
-        # 加上真實瀏覽器的 User-Agent
         context = await browser.new_context(
             locale="zh-TW", 
-            viewport={"width": 1280, "height": 900},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            viewport={"width": 1280, "height": 1000}, # 稍微加高高度
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        status_cb(-1)  # 開啟頁面中
-        await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(4000)
+        status_cb(-1) 
+        await page.goto(TARGET_URL, wait_until="networkidle", timeout=60000)
+        await page.wait_for_timeout(5000)
         
         # 1. 處理彈窗
         await close_popups(page)
 
-        # 2. 強制尋找並點擊「評論」分頁按鈕 (解決只顯示總覽的問題)
-        try:
-            tab_selectors = [
-                'button[role="tab"]:has-text("評論")',
-                'button[role="tab"]:has-text("Reviews")',
-                'button[aria-label*="評論"]',
-                'button[aria-label*="Reviews"]'
-            ]
-            for tab_sel in tab_selectors:
-                tab_btn = page.locator(tab_sel).first
-                if await tab_btn.is_visible():
-                    await tab_btn.click()
-                    await page.wait_for_timeout(3000) # 等待評論區載入
-                    break
-        except Exception:
-            pass # 如果找不到就繼續，可能已經在評論區了
+        # 2. 【新增】檢查側欄是否出現，若沒出現則主動搜尋
+        sidebar_title = page.locator('h1.DUwDvf').first # 店家標題的 class
+        if await sidebar_title.count() == 0:
+            # 沒看到標題，嘗試點擊搜尋框並搜尋
+            try:
+                search_box = page.locator('input#searchboxinput')
+                await search_box.fill("國立公共資訊圖書館")
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(5000)
+            except Exception:
+                pass
 
-        # 💡 【終極除錯大絕招】在這裡截圖，顯示在 Streamlit 上！
-        # 如果還是爬不到，你可以直接看這張圖知道 Google 給了你什麼畫面
+        # 3. 強制點擊「評論」分頁
+        tab_found = False
+        tab_selectors = [
+            'button[role="tab"]:has-text("評論")',
+            'button[role="tab"]:has-text("Reviews")',
+            'div.R61m6b:has-text("評論")', # 有時候是 div
+            'button[aria-label*="評論"]'
+        ]
+        
+        for tab_sel in tab_selectors:
+            try:
+                tab_btn = page.locator(tab_sel).first
+                if await tab_btn.is_visible(timeout=3000):
+                    await tab_btn.click()
+                    tab_found = True
+                    await page.wait_for_timeout(3000)
+                    break
+            except Exception:
+                continue
+
+        # 如果透過搜尋進來是列表（多個結果），點擊第一個結果
+        if not tab_found:
+            first_result = page.locator('a.hfpxzc').first
+            if await first_result.is_visible():
+                await first_result.click()
+                await page.wait_for_timeout(3000)
+
+        # 最後一次截圖檢查（這時應該要看到評論區了）
         await page.screenshot(path="debug_screenshot.png")
 
         try:
+            # 等待評論容器出現
             await page.wait_for_selector('div[role="feed"]', timeout=10000)
         except Exception:
             pass
