@@ -25,21 +25,21 @@ TARGET_URL = (
 )
 
 
-# ── 確保 Playwright Chromium 已安裝 ──────────────────────────────────────────
-@st.cache_resource(show_spinner="正在初始化瀏覽器環境（首次約需 1 分鐘）...")
-def install_playwright():
-    # 只下載瀏覽器執行檔（不用 --with-deps，避免需要 sudo）
-    result = subprocess.run(
-        [sys.executable, "-m", "playwright", "install", "chromium"],
-        capture_output=False,  # 顯示輸出以便除錯
-        text=True,
-    )
-    return result.returncode
-
-
-install_playwright()
-
 from playwright.async_api import async_playwright  # noqa: E402
+
+# ── 找出系統 Chromium 路徑 ────────────────────────────────────────────────────
+def find_chromium() -> str | None:
+    """依序尋找系統上可用的 Chromium 執行檔路徑"""
+    candidates = [
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ]
+    for path in candidates:
+        if subprocess.run(["test", "-f", path], capture_output=True).returncode == 0:
+            return path
+    return None
 
 
 # ── 爬蟲核心邏輯 ─────────────────────────────────────────────────────────────
@@ -132,11 +132,16 @@ async def parse_reviews(page, max_count: int) -> list[dict]:
 
 
 async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
+    chromium_path = find_chromium()
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
+        launch_kwargs = dict(
             headless=True,
-            args=["--lang=zh-TW", "--no-sandbox", "--disable-dev-shm-usage"],
+            args=["--lang=zh-TW", "--no-sandbox", "--disable-dev-shm-usage",
+                  "--disable-gpu", "--single-process"],
         )
+        if chromium_path:
+            launch_kwargs["executable_path"] = chromium_path
+        browser = await p.chromium.launch(**launch_kwargs)
         context = await browser.new_context(locale="zh-TW", viewport={"width": 1280, "height": 900})
         page = await context.new_page()
 
