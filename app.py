@@ -136,28 +136,66 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
     async with async_playwright() as p:
         launch_kwargs = dict(
             headless=True,
-            args=["--lang=zh-TW", "--no-sandbox", "--disable-dev-shm-usage",
-                  "--disable-gpu", "--single-process"],
+            args=[
+                "--lang=zh-TW", 
+                "--no-sandbox", 
+                "--disable-dev-shm-usage",
+                "--disable-gpu", 
+                "--single-process",
+                # 隱藏自動化特徵，降低被 Google 擋下的機率
+                "--disable-blink-features=AutomationControlled" 
+            ],
         )
         if chromium_path:
             launch_kwargs["executable_path"] = chromium_path
+            
         browser = await p.chromium.launch(**launch_kwargs)
-        context = await browser.new_context(locale="zh-TW", viewport={"width": 1280, "height": 900})
+        
+        # 加上真實瀏覽器的 User-Agent
+        context = await browser.new_context(
+            locale="zh-TW", 
+            viewport={"width": 1280, "height": 900},
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
         page = await context.new_page()
 
         status_cb(-1)  # 開啟頁面中
         await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(4000)
+        
+        # 1. 處理彈窗
         await close_popups(page)
 
+        # 2. 強制尋找並點擊「評論」分頁按鈕 (解決只顯示總覽的問題)
         try:
-            await page.wait_for_selector('div[role="feed"]', timeout=15000)
+            tab_selectors = [
+                'button[role="tab"]:has-text("評論")',
+                'button[role="tab"]:has-text("Reviews")',
+                'button[aria-label*="評論"]',
+                'button[aria-label*="Reviews"]'
+            ]
+            for tab_sel in tab_selectors:
+                tab_btn = page.locator(tab_sel).first
+                if await tab_btn.is_visible():
+                    await tab_btn.click()
+                    await page.wait_for_timeout(3000) # 等待評論區載入
+                    break
+        except Exception:
+            pass # 如果找不到就繼續，可能已經在評論區了
+
+        # 💡 【終極除錯大絕招】在這裡截圖，顯示在 Streamlit 上！
+        # 如果還是爬不到，你可以直接看這張圖知道 Google 給了你什麼畫面
+        await page.screenshot(path="debug_screenshot.png")
+
+        try:
+            await page.wait_for_selector('div[role="feed"]', timeout=10000)
         except Exception:
             pass
 
         await scroll_to_load(page, max_reviews, status_cb)
         reviews = await parse_reviews(page, max_reviews)
         await browser.close()
+        
     return reviews
 
 
@@ -217,7 +255,25 @@ if start_btn:
 
     with st.spinner("爬蟲執行中，請稍候..."):
         reviews = asyncio.run(run_crawler(max_reviews, status_cb))
+# ... 前面是你的 status_cb 定義 ...
 
+    with st.spinner("爬蟲執行中，請稍候..."):
+        # 這裡執行爬蟲
+        reviews = asyncio.run(run_crawler(max_reviews, status_cb))
+
+    progress_bar.progress(1.0)
+
+    # --- 💡 在這裡新增：顯示除錯截圖 ---
+    import os
+    if os.path.exists("debug_screenshot.png"):
+        with st.expander("🛠️ 查看爬蟲當下看到的畫面 (除錯用)"):
+            st.image("debug_screenshot.png")
+    # --------------------------------
+
+    status_box.success(f"完成！共爬取 {len(reviews)} 則評論。")
+
+    if reviews:
+        # ... 後面接原本的顯示結果邏輯 ...
     progress_bar.progress(1.0)
     status_box.success(f"完成！共爬取 {len(reviews)} 則評論。")
 
