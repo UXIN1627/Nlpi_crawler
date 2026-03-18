@@ -146,44 +146,47 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
             launch_kwargs["executable_path"] = chromium_path
             
         browser = await p.chromium.launch(**launch_kwargs)
-        
-        # 設定模擬真實瀏覽器的環境
         context = await browser.new_context(
             locale="zh-TW", 
             viewport={"width": 1280, "height": 1000},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
-        status_cb(-1) # 狀態更新：正在開啟頁面
+        status_cb(-1) 
         
-        # --- 核心導航邏輯：解決 Timeout 問題 ---
+        # 1. 前往網頁
         try:
-            # 改用 domcontentloaded 避免網路請求抓不到 idle 而超時
             await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(3000)
+            await close_popups(page) # 優先處理 Cookie 彈窗
         except Exception:
-            # 如果超時，嘗試強制停止並繼續執行
             pass
             
-        # 等待地圖與側欄渲染
-        await page.wait_for_timeout(5000)
-        
-        # 1. 處理彈窗（Cookie 或條款）
-        await close_popups(page)
+        # 2. 強力搜尋邏輯
+        try:
+            search_box = page.locator('input#searchboxinput')
+            # 確保搜尋框可見並點擊它
+            await search_box.wait_for(state="visible", timeout=10000)
+            await search_box.click()
+            await page.wait_for_timeout(500)
+            
+            # 清空並輸入（模擬打字速度，這對 Google 很有用）
+            await search_box.fill("")
+            await search_box.type("國立公共資訊圖書館", delay=100)
+            
+            # 點擊搜尋按鈕 (放大鏡)
+            search_btn = page.locator('#searchbox-searchbutton')
+            await search_btn.click()
+            
+            # 等待側欄標題出現（代表搜尋成功並進入了店家頁面）
+            # DUwDvf 是 Google Maps 側欄標題常用的 Class
+            await page.wait_for_selector('h1.DUwDvf', timeout=15000)
+            status_cb(-1) # 再次更新狀態：已進入圖書館頁面
+        except Exception as e:
+            print(f"搜尋過程出錯: {e}")
 
-        # 2. 確保側欄資訊有出來，若沒有則主動搜尋
-        # 檢查是否有標題出現，如果沒有代表進去的是空地圖
-        if await page.locator('h1.DUwDvf').first.count() == 0:
-            try:
-                search_box = page.locator('input#searchboxinput')
-                await search_box.fill("國立公共資訊圖書館")
-                await page.keyboard.press("Enter")
-                await page.wait_for_timeout(5000)
-            except Exception:
-                pass
-
-        # 3. 尋找並點擊「評論」按鈕
-        tab_found = False
+        # 3. 點擊「評論」標籤
         tab_selectors = [
             'button[role="tab"]:has-text("評論")',
             'button[role="tab"]:has-text("Reviews")',
@@ -196,22 +199,21 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
                 btn = page.locator(tab_sel).first
                 if await btn.is_visible(timeout=3000):
                     await btn.click()
-                    tab_found = True
                     await page.wait_for_timeout(3000)
                     break
             except Exception:
                 continue
 
-        # 4. 除錯截圖：讓我們看現在到底在哪一頁
+        # 4. 截圖除錯（搜尋完成後的樣子）
         await page.screenshot(path="debug_screenshot.png")
 
-        # 5. 等待評論清單容器
+        # 5. 等待評論清單
         try:
             await page.wait_for_selector('div[role="feed"]', timeout=10000)
         except Exception:
             pass
 
-        # 6. 開始滾動載入與解析
+        # 6. 滾動載入與解析
         await scroll_to_load(page, max_reviews, status_cb)
         reviews = await parse_reviews(page, max_reviews)
         
