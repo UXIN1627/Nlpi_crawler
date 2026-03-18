@@ -18,7 +18,8 @@ st.set_page_config(
 )
 
 TARGET_URL = (
-    "https://www.google.com/maps/search/%E5%9C%8B%E7%AB%8B%E5%85%AC%E5%85%B1%E8%B3%87%E8%A8%8A%E5%9C%96%E6%9B%B8%E9%A4%A8"
+    "# 這個網址帶有 !9m1!1b1 參數，理論上會直接開啟「所有評論」面板
+TARGET_URL = "https://www.google.com/maps/place/%E5%9C%8B%E7%AB%8B%E5%85%AC%E5%85%B1%E8%B3%87%E8%A8%8A%E5%9C%96%E6%9B%B8%E9%A4%A8/@24.1272771,120.6708688,17z/data=!4m8!3m7!1s0x34693d0146d61257:0x7a16000e8eb3abce!8m2!3d24.1272771!4d120.6708688!9m1!1b1"
 )
 
 
@@ -149,71 +150,50 @@ async def run_crawler(max_reviews: int, status_cb) -> list[dict]:
         context = await browser.new_context(
             locale="zh-TW", 
             viewport={"width": 1280, "height": 1000},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
         )
         page = await context.new_page()
 
         status_cb(-1) 
         
-        # 1. 前往網頁
+        # 1. 直接前往目標 Place 頁面
         try:
-            await page.goto(TARGET_URL, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(3000)
-            await close_popups(page) # 優先處理 Cookie 彈窗
+            # 使用 commit 確保只要開始接收資料就繼續，不乾等
+            await page.goto(TARGET_URL, wait_until="commit", timeout=60000)
+            await page.wait_for_timeout(7000) # 給予充足的渲染時間
+            await close_popups(page)
         except Exception:
             pass
-            
-        # 2. 強力搜尋邏輯
-        try:
-            search_box = page.locator('input#searchboxinput')
-            # 確保搜尋框可見並點擊它
-            await search_box.wait_for(state="visible", timeout=10000)
-            await search_box.click()
-            await page.wait_for_timeout(500)
-            
-            # 清空並輸入（模擬打字速度，這對 Google 很有用）
-            await search_box.fill("")
-            await search_box.type("國立公共資訊圖書館", delay=100)
-            
-            # 點擊搜尋按鈕 (放大鏡)
-            search_btn = page.locator('#searchbox-searchbutton')
-            await search_btn.click()
-            
-            # 等待側欄標題出現（代表搜尋成功並進入了店家頁面）
-            # DUwDvf 是 Google Maps 側欄標題常用的 Class
-            await page.wait_for_selector('h1.DUwDvf', timeout=15000)
-            status_cb(-1) # 再次更新狀態：已進入圖書館頁面
-        except Exception as e:
-            print(f"搜尋過程出錯: {e}")
 
-        # 3. 點擊「評論」標籤
-        tab_selectors = [
-            'button[role="tab"]:has-text("評論")',
-            'button[role="tab"]:has-text("Reviews")',
-            'div.R61m6b:has-text("評論")',
-            'button[aria-label*="評論"]'
-        ]
-        
-        for tab_sel in tab_selectors:
-            try:
-                btn = page.locator(tab_sel).first
-                if await btn.is_visible(timeout=3000):
-                    await btn.click()
-                    await page.wait_for_timeout(3000)
-                    break
-            except Exception:
-                continue
+        # 2. 【強力 JS 點擊】尋找「評論」按鈕
+        # 不管 Class 是什麼，直接找文字包含 "評論" 或 "Reviews" 的按鈕
+        await page.evaluate('''() => {
+            const btns = Array.from(document.querySelectorAll('button, div, span'));
+            const target = btns.find(b => 
+                (b.innerText && (b.innerText.includes('評論') || b.innerText.includes('Reviews'))) ||
+                (b.getAttribute('aria-label') && b.getAttribute('aria-label').includes('評論'))
+            );
+            if (target) {
+                target.click();
+            }
+        }''')
+        await page.wait_for_timeout(3000)
 
-        # 4. 截圖除錯（搜尋完成後的樣子）
+        # 3. 備援邏輯：如果還是沒出現側欄，嘗試按一次搜尋鍵（對應網址參數）
+        if await page.locator('div[role="feed"]').count() == 0:
+            await page.keyboard.press("Enter")
+            await page.wait_for_timeout(5000)
+
+        # 4. 截圖檢查（現在應該要有側欄了）
         await page.screenshot(path="debug_screenshot.png")
 
-        # 5. 等待評論清單
+        # 5. 等待並滾動
         try:
-            await page.wait_for_selector('div[role="feed"]', timeout=10000)
+            # 這是評論清單的特徵
+            await page.wait_for_selector('div[data-review-id]', timeout=15000)
         except Exception:
             pass
 
-        # 6. 滾動載入與解析
         await scroll_to_load(page, max_reviews, status_cb)
         reviews = await parse_reviews(page, max_reviews)
         
